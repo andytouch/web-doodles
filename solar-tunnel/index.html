@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Solar Tunnel</title>
+  <style>
+    * { margin: 0; padding: 0; }
+    body { overflow: hidden; }
+    canvas { display: block; }
+  </style>
+</head>
+<body>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.165.0/build/three.module.js"
+  }
+}
+</script>
+<script type="module">
+  import * as THREE from 'three';
+
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setPixelRatio(devicePixelRatio);
+  renderer.setClearColor(0xFF9B1E);
+  document.body.appendChild(renderer.domElement);
+
+  const scene = new THREE.Scene();
+  scene.fog = new THREE.Fog(0xFF9B1E, 5, 30);
+
+  const camera = new THREE.PerspectiveCamera(40, innerWidth / innerHeight, 0.1, 100);
+  camera.position.z = 1;
+
+  const material = new THREE.ShaderMaterial({
+    uniforms: {
+      uTime:     { value: 0 },
+      uFogColor: { value: new THREE.Color(0xFF9B1E) },
+      uFogNear:  { value: 1 },
+      uFogFar:   { value: 30 }
+    },
+    transparent: true,
+    vertexShader: `
+      varying vec2 vUv;
+      varying vec3 vWorldPos;
+      varying float vDepth;
+      void main() {
+        vUv = uv;
+        vWorldPos = (modelMatrix * vec4(position, 1.0)).xyz;
+        vec4 mvPos = modelViewMatrix * vec4(position, 1.0);
+        vDepth = -mvPos.z;
+        gl_Position = projectionMatrix * mvPos;
+      }
+    `,
+    fragmentShader: `
+      uniform float uTime;
+      uniform vec3 uFogColor;
+      uniform float uFogNear;
+      uniform float uFogFar;
+      varying vec2 vUv;
+      varying vec3 vWorldPos;
+      varying float vDepth;
+
+      const float TILE = 30.0;
+
+      float hash(vec3 p) {
+        return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453);
+      }
+
+      float noise(vec3 p) {
+        vec3 i = floor(p);
+        vec3 f = fract(p);
+        vec3 u = f * f * (3.0 - 2.0 * f);
+        vec3 t = mod(i, TILE);
+        return mix(
+          mix(mix(hash(t),                    hash(mod(i + vec3(1,0,0), TILE)), u.x),
+              mix(hash(mod(i + vec3(0,1,0), TILE)), hash(mod(i + vec3(1,1,0), TILE)), u.x), u.y),
+          mix(mix(hash(mod(i + vec3(0,0,1), TILE)), hash(mod(i + vec3(1,0,1), TILE)), u.x),
+              mix(hash(mod(i + vec3(0,1,1), TILE)), hash(mod(i + vec3(1,1,1), TILE)), u.x), u.y),
+          u.z
+        );
+      }
+
+      void main() {
+        float d = length(vUv - 0.5) * 3.0;
+
+        // hard transparent center — noise never bleeds in here
+        if (d < 0.1) discard;
+
+        // rim zone: noise creates organic edge between 0.7 and 1.0
+        float rim = clamp((d - 0.7) / 0.3, 0.0, 1.0);
+        float ripple = sin(vWorldPos.z * 4.0 + uTime) * 0.1;
+        vec3 samplePos = vWorldPos + vec3(ripple, ripple, 0.0);
+        float n = noise(samplePos * 1.5 + vec3(0.0, 0.0, uTime * 0.3));
+        if (n > rim) discard;
+
+        float fogFactor = clamp((vDepth - uFogNear) / (uFogFar - uFogNear), 0.0, 1.0);
+        vec3 sliceColor = vec3(0.05, 0.04, 0.6);
+        gl_FragColor = vec4(mix(sliceColor, uFogColor, fogFactor), 1.0);
+      }
+    `
+  });
+
+  const spacing = 1.0;
+  const geometry = new THREE.PlaneGeometry(6, 6);
+  const planes = [];
+  for (let i = 0; i < 30; i++) {
+    const plane = new THREE.Mesh(geometry, material);
+    plane.position.z = -i * spacing;
+    scene.add(plane);
+    planes.push(plane);
+  }
+
+  const endCap = new THREE.Mesh(
+    new THREE.PlaneGeometry(6, 6),
+    new THREE.MeshBasicMaterial({ color: 0xFF9B1E, fog: false })
+  );
+  endCap.position.z = -30 * spacing;
+  scene.add(endCap);
+
+  window.addEventListener('resize', () => {
+    camera.aspect = innerWidth / innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(innerWidth, innerHeight);
+  });
+
+  const mouse = { x: 0, y: 0 };
+  const target = { x: 0, y: 0 };
+  window.addEventListener('mousemove', e => {
+    mouse.x = (e.clientX / innerWidth  - 0.5) * 5;
+    mouse.y = (e.clientY / innerHeight - 0.5) * 5;
+  });
+
+  function animate(t) {
+    requestAnimationFrame(animate);
+
+    target.x += (mouse.x - target.x) * 0.05;
+    target.y += (mouse.y - target.y) * 0.05;
+    camera.position.x = target.x * 0.4;
+    camera.position.y = -target.y * 0.4;
+    camera.lookAt(0, 0, -10);
+
+    for (const plane of planes) {
+      const depth = -plane.position.z / 30;
+      const bend = Math.pow(depth, 2.5);
+      plane.position.x = target.x * bend * 5;
+      plane.position.y = -target.y * bend * 5;
+    }
+
+    material.uniforms.uTime.value = t * 0.005;
+    renderer.render(scene, camera);
+  }
+  animate();
+</script>
+</body>
+</html>
